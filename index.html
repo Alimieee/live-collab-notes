@@ -178,7 +178,7 @@
         const existingRoomsList = document.getElementById('existing-rooms-list');
 
         let typingTimer;
-        const socket = io();
+        const socket = io("https://live-collab-notes.onrender.com");
 
         const myName = prompt("Welcome! What is your name?") || "Anonymous";
 
