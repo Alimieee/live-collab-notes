@@ -1,0 +1,309 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Real-Time Notes</title>
+
+    <!-- 🆕 NEW: Download Quill's Theme (CSS) -->
+    <link href="https://cdn.quilljs.com/1.3.6/quill.snow.css" rel="stylesheet">
+
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background-color: #e9ecef;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 40px;
+            margin: 0;
+        }
+
+        h1 {
+            color: #343a40;
+            margin-bottom: 5px;
+        }
+
+        .status {
+            color: #6c757d;
+            font-size: 0.9rem;
+            margin-bottom: 20px;
+            font-weight: bold;
+        }
+
+        #lobby-screen {
+            background: white;
+            padding: 30px;
+            border-radius: 8px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+            width: 100%;
+            max-width: 400px;
+            text-align: center;
+            margin-bottom: 20px;
+        }
+
+        #lobby-screen input {
+            width: 80%;
+            padding: 10px;
+            margin-bottom: 10px;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+        }
+
+        #lobby-screen button {
+            background-color: #007bff;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-weight: bold;
+            margin: 5px;
+        }
+
+        #lobby-screen button:hover {
+            background-color: #0056b3;
+        }
+
+        #existing-rooms-list {
+            margin-top: 20px;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+
+        #existing-rooms-list button {
+            background-color: #28a745;
+        }
+
+        #existing-rooms-list button:hover {
+            background-color: #218838;
+        }
+
+        #app-screen {
+            display: none;
+            width: 100%;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        /* 🆕 NEW: Styling for our new Google Docs container */
+        #editor-container {
+            width: 100%;
+            max-width: 800px;
+            background-color: white;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+            border-radius: 8px;
+        }
+
+        #editor {
+            height: 50vh;
+            font-size: 1.1rem;
+        }
+
+        /* Make the toolbar look nice and rounded at the top */
+        .ql-toolbar {
+            background-color: #f8f9fa;
+            border-top-left-radius: 8px;
+            border-top-right-radius: 8px;
+            border: none !important;
+            border-bottom: 1px solid #ccc !important;
+        }
+
+        .ql-container {
+            border: none !important;
+            border-bottom-left-radius: 8px;
+            border-bottom-right-radius: 8px;
+        }
+
+        .remote-cursor {
+            position: absolute;
+            background-color: #ff007f;
+            color: white;
+            padding: 4px 10px;
+            border-radius: 12px;
+            font-family: sans-serif;
+            font-size: 12px;
+            font-weight: bold;
+            pointer-events: none;
+            z-index: 1000;
+            transition: top 0.05s linear, left 0.05s linear;
+        }
+    </style>
+</head>
+
+<body>
+
+    <h1>📝 Live Collab Notes</h1>
+    <div class="status" id="status-text">🔴 Offline (Not connected to server)</div>
+
+    <div id="lobby-screen">
+        <h3>Create a New Room</h3>
+        <input type="text" id="new-room-input" placeholder="e.g., my-secret-room">
+        <!-- 🆕 NEW: Password input field -->
+        <input type="password" id="new-room-password" placeholder="Set a PIN Code (Optional)"
+            style="margin-top: 5px; width: 80%; padding: 10px; border: 1px solid #ccc; border-radius: 4px;">
+        <br>
+        <button onclick="joinRoomFromInput()">Create & Join</button>
+
+        <hr style="margin: 20px 0; border: 0.5px solid #eee;">
+
+        <h3>Or Join an Existing Room:</h3>
+        <div id="existing-rooms-list">
+            <p style="color: #888;">Loading rooms from cloud...</p>
+        </div>
+    </div>
+
+    <div id="app-screen">
+        <div id="typing-alert" style="color: #007bff; font-style: italic; height: 20px; margin-bottom: 10px;"></div>
+
+        <!-- 🆕 NEW: The Word Processor UI -->
+        <div id="editor-container">
+            <div id="editor"></div>
+        </div>
+    </div>
+
+
+    <script src="/socket.io/socket.io.js"></script>
+
+    <!-- 🆕 NEW: Download Quill's Brain (Javascript) -->
+    <script src="https://cdn.quilljs.com/1.3.6/quill.js"></script>
+
+    <script>
+        const statusText = document.getElementById('status-text');
+        const typingAlert = document.getElementById('typing-alert');
+        const lobbyScreen = document.getElementById('lobby-screen');
+        const appScreen = document.getElementById('app-screen');
+        const existingRoomsList = document.getElementById('existing-rooms-list');
+
+        let typingTimer;
+        const socket = io();
+
+        const myName = prompt("Welcome! What is your name?") || "Anonymous";
+
+        // Initialize Quill Editor
+        const quill = new Quill('#editor', {
+            theme: 'snow',
+            placeholder: 'Start typing a beautiful document here...',
+            modules: {
+                toolbar: [
+                    ['bold', 'italic', 'underline', 'strike'],
+                    [{ 'list': 'ordered' }, { 'list': 'bullet' }],
+                    [{ 'color': [] }, { 'background': [] }],
+                    ['image', 'link']
+                ]
+            }
+        });
+
+        // ------------------------------------------------
+        // 🏨 LOBBY LOGIC 
+        // ------------------------------------------------
+        socket.on('available-rooms', (rooms) => {
+            existingRoomsList.innerHTML = '';
+            if (rooms.length === 0) {
+                existingRoomsList.innerHTML = '<p style="color: #888;">No active rooms yet.</p>';
+            } else {
+                rooms.forEach(room => createRoomButton(room));
+            }
+        });
+
+        socket.on('new-room-created', (roomName) => {
+            if (existingRoomsList.innerHTML.includes("No active rooms")) {
+                existingRoomsList.innerHTML = '';
+            }
+            createRoomButton(roomName);
+        });
+
+        // ------------------------------------------------
+        // 🚪 SECURE JOIN LOGIC (THE FIX IS HERE)
+        // ------------------------------------------------
+
+        // 1. When clicking an existing green button
+        function createRoomButton(roomName) {
+            const btn = document.createElement('button');
+            btn.innerText = `🚪 Join: ${roomName}`;
+            btn.onclick = () => {
+                const enteredPin = prompt(`Enter the PIN for room '${roomName}' (leave blank if none):`);
+                if (enteredPin !== null) {
+                    // Send the PACKAGE, not just the string!
+                    socket.emit('join-room', { roomName: roomName, password: enteredPin });
+                }
+            };
+            existingRoomsList.appendChild(btn);
+        }
+
+        // 2. When creating a brand new room from the input boxes
+        function joinRoomFromInput() {
+            const roomName = document.getElementById('new-room-input').value.trim();
+            const password = document.getElementById('new-room-password').value;
+
+            if (roomName !== "") {
+                // 🆕 THE FIX: We are now sending this to the 'create-room' door!
+                socket.emit('create-room', { roomName: roomName, password: password });
+            } else {
+                alert("Please enter a room name!");
+            }
+        }
+
+        // 3. Waiting for the Green Light from the server!
+        socket.on('join-success', (roomName) => {
+            lobbyScreen.style.display = 'none';
+            appScreen.style.display = 'flex';
+            statusText.innerText = `🟢 Connected to Room: ${roomName}`;
+            statusText.style.color = '#28a745';
+        });
+
+        // 4. Waiting for the Red Light from the server!
+        socket.on('join-error', (errorMessage) => {
+            alert("❌ Access Denied: " + errorMessage);
+        });
+
+        // ------------------------------------------------
+        // 🖱️ MOUSE & TYPING LOGIC
+        // ------------------------------------------------
+        document.addEventListener('mousemove', (event) => {
+            if (appScreen.style.display === 'flex') {
+                socket.emit('mouse-move', { x: event.pageX, y: event.pageY, name: myName, id: socket.id });
+            }
+        });
+
+        socket.on('user-mouse-moved', (data) => {
+            let cursor = document.getElementById('cursor-' + data.id);
+            if (!cursor) {
+                cursor = document.createElement('div');
+                cursor.id = 'cursor-' + data.id;
+                cursor.className = 'remote-cursor';
+                document.body.appendChild(cursor);
+            }
+            cursor.style.left = data.x + 'px';
+            cursor.style.top = data.y + 'px';
+            cursor.innerHTML = '🖱️ ' + data.name;
+        });
+
+        quill.on('text-change', function (delta, oldDelta, source) {
+            if (source === 'user') {
+                const currentHtml = quill.root.innerHTML;
+                socket.emit('send-typing', currentHtml);
+                socket.emit('typing');
+                clearTimeout(typingTimer);
+                typingTimer = setTimeout(() => { socket.emit('stopped-typing'); }, 1000);
+            }
+        });
+
+        socket.on('receive-update', (newHtml) => {
+            if (newHtml && quill.root.innerHTML !== newHtml) {
+                const currentSelection = quill.getSelection();
+                const delta = quill.clipboard.convert(newHtml);
+                quill.setContents(delta, 'silent');
+                if (currentSelection) { quill.setSelection(currentSelection); }
+            }
+        });
+
+        socket.on('user-is-typing', () => { typingAlert.innerText = '✍️ Someone is typing...'; });
+        socket.on('user-stopped-typing', () => { typingAlert.innerText = ''; });
+
+    </script>
+</body>
+
+</html>
