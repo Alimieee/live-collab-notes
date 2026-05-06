@@ -180,6 +180,18 @@
         let typingTimer;
         const socket = io("https://live-collab-notes.onrender.com");
 
+        socket.on('connect', () => {
+            console.log("Connected to server!");
+            statusText.innerText = "🟢 Online";
+            statusText.style.color = "#28a745";
+        });
+
+        socket.on('connect_error', (err) => {
+            console.error("Connection Error:", err);
+            statusText.innerText = "🔴 Connection Error (Check Console)";
+            statusText.style.color = "#dc3545";
+        });
+
         const myName = prompt("Welcome! What is your name?") || "Anonymous";
 
         // Initialize Quill Editor
